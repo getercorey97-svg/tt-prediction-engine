@@ -2,9 +2,8 @@ name: Global Table Tennis Data Synchronization
 
 on:
   schedule:
-    # Execute daily at 00:00 UTC to pre-process global datasets
     - cron: '0 0 * * *'
-  workflow_dispatch: # Allow manual trigger for immediate synchronization
+  workflow_dispatch: 
 
 jobs:
   preprocess_and_sync:
@@ -14,7 +13,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Required for accurate rolling-window processing
+          fetch-depth: 0 
 
       - name: Set up Python Environment
         uses: actions/setup-python@v5
@@ -35,5 +34,5 @@ jobs:
         run: |
           git config --global user.name "GitHub Actions - Data Sync"
           git config --global user.email "actions@github.com"
-          git add data/*.csv data/*.db
+          git add data/
           git diff --quiet && git diff --staged --quiet || (git commit -m "[Auto] Sync global match results and database update" && git push)
