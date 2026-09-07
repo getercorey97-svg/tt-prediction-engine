@@ -24,7 +24,7 @@ class TableTennisXGBoost:
     def engineer_differentials(self, df):
         """
         Transforms absolute player identities into relative strength differentials,
-        incorporating Schedule Density (Fatigue) and micro-stylistic metrics[span_1](start_span)[span_1](end_span).
+        incorporating Schedule Density (Fatigue) and micro-stylistic metrics[span_0](start_span)[span_0](end_span).
         """
         df['glicko_rating_diff'] = df['player_a_glicko'] - df['player_b_glicko']
         df['melo_vector_distance'] = np.linalg.norm(df['player_a_melo'] - df['player_b_melo'], axis=1)
@@ -53,7 +53,7 @@ class TableTennisXGBoost:
 
     def train_with_rolling_validation(self, X, y):
         """
-        Implements sequential rolling-window cross-validation to prevent look-ahead bias[span_2](start_span)[span_2](end_span).
+        Implements sequential rolling-window cross-validation to prevent look-ahead bias[span_1](start_span)[span_1](end_span).
         """
         tscv = TimeSeriesSplit(n_splits=5)
         brier_scores = []
@@ -74,10 +74,9 @@ class TableTennisXGBoost:
 
     def calibrate_and_save(self, X, y):
         """
-        Applies isotonic regression calibration for Brier Score and Log-Loss minimization[span_3](start_span)[span_3](end_span).
+        Applies cross-validated probability calibration compatible with modern scikit-learn.
         """
-        self.calibrated_model = CalibratedClassifierCV(self.model, method='isotonic', cv='prefit')
-        self.model.fit(X, y)
+        self.calibrated_model = CalibratedClassifierCV(self.model, method='isotonic', cv=3)
         self.calibrated_model.fit(X, y)
         
         joblib.dump(self.calibrated_model, MODEL_ARTIFACT_PATH)
