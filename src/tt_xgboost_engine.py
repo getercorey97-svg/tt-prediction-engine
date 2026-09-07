@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import numpy as np
 import xgboost as xgb
@@ -6,7 +7,9 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.calibration import CalibratedClassifierCV
 import joblib
 
-MODEL_ARTIFACT_PATH = "../data/xgb_model_calibrated.pkl"
+# Robust pathing to ensure data/ folder is correctly located regardless of execution directory
+DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../data"))
+MODEL_ARTIFACT_PATH = os.path.join(DATA_DIR, "xgb_model_calibrated.pkl")
 
 class TableTennisXGBoost:
     def __init__(self):
@@ -74,15 +77,19 @@ class TableTennisXGBoost:
 
     def calibrate_and_save(self, X, y):
         """
-        Applies cross-validated probability calibration compatible with modern scikit-learn.
+        Applies cross-validated probability calibration and saves the artifact securely.
         """
+        os.makedirs(DATA_DIR, exist_ok=True)
         self.calibrated_model = CalibratedClassifierCV(self.model, method='isotonic', cv=3)
         self.calibrated_model.fit(X, y)
         
         joblib.dump(self.calibrated_model, MODEL_ARTIFACT_PATH)
-        print("Calibrated model artifact saved for edge execution.")
+        print(f"Calibrated model artifact saved to: {MODEL_ARTIFACT_PATH}")
 
     def load_and_predict(self, X_live):
         if not self.calibrated_model:
-            self.calibrated_model = joblib.load(MODEL_ARTIFACT_PATH)
+            if os.path.exists(MODEL_ARTIFACT_PATH):
+                self.calibrated_model = joblib.load(MODEL_ARTIFACT_PATH)
+            else:
+                raise FileNotFoundError(f"Model artifact not found at {MODEL_ARTIFACT_PATH}. Run seeding protocol first.")
         return self.calibrated_model.predict_proba(X_live)[:, 1]
