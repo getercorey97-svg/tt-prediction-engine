@@ -2,9 +2,9 @@ name: Cloud Prediction Engine Scheduler
 
 on:
   schedule:
-    # Executes automatically every 4 hours to evaluate live lines.
+    # Executes automatically every 4 hours to evaluate live lines
     - cron: '0 */4 * * *'
-  workflow_dispatch: # Allows you to manually trigger a run
+  workflow_dispatch: 
 
 jobs:
   execute_pipeline:
