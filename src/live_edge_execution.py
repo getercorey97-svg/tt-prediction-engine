@@ -12,7 +12,7 @@ class LiveEdgeExecution:
 
     def process_live_odds(self, odds_player_a, odds_player_b):
         """
-        Strips bookmaker margin using Shin's method analytical binary solution[span_7](start_span)[span_7](end_span).
+        Strips bookmaker margin using Shin's method analytical binary solution.
         """
         pi_a = 1 / odds_player_a
         pi_b = 1 / odds_player_b
@@ -36,37 +36,48 @@ class LiveEdgeExecution:
         return recommended_stake
 
     def push_android_notification(self, match_title, edge, stake, odds):
-        message = (
-            f"Edge Identified: +{edge}%\n"
-            f"Recommended Stake: ${stake:.2f}\n"
-            f"Target Odds: {odds}"
-        )
-        
+        """
+        Dynamically formats the notification based on whether an edge exists.
+        """
+        if edge > 0:
+            message = f"✅ EDGE FOUND: +{edge}%\nRecommended Stake: ${stake:.2f}\nTarget Odds: {odds}"
+            priority = "high"
+            tags = "moneybag,ping_pong"
+        else:
+            message = f"❌ NO EDGE: {edge}%\nAvoid Betting.\nTarget Odds: {odds}"
+            priority = "default"
+            tags = "no_entry,ping_pong"
+
         requests.post(
             f"https://ntfy.sh/{self.ntfy_topic}",
             data=message.encode('utf-8'),
             headers={
-                "Title": f"TT Engine Alert: {match_title}",
-                "Priority": "urgent",
-                "Tags": "moneybag,ping_pong"
+                "Title": f"TT Alert: {match_title}",
+                "Priority": priority,
+                "Tags": tags
             }
         )
-        print(f"Alert pushed to device for {match_title}")
+        print(f"Alert pushed to device for {match_title} | Edge: {edge}%")
 
     def evaluate_match(self, match_title, live_features, odds_a, odds_b, previous_odds_a=None):
-        """Main execution flow incorporating Steam Tracking (Line Velocity)."""
+        """Main execution flow pushing alerts for ALL matches unconditionally."""
         market_prob_a, market_prob_b = self.process_live_odds(odds_a, odds_b)
         engine_prob_a = self.engine.load_and_predict(live_features)[0]
         
         line_velocity = 0.0
         if previous_odds_a is not None:
-            line_velocity = odds_a - previous_odds_a  
+            line_velocity = odds_a - previous_odds_a  # Positive means market fading
             
         adjusted_edge_modifier = -0.01 if line_velocity > 0.15 else 0.0
         
-        if engine_prob_a > market_prob_a:
-            edge_pct = ((engine_prob_a - market_prob_a) + adjusted_edge_modifier) * 100
-            if edge_pct >= 2.5:  
-                stake = self.calculate_kelly_criterion(engine_prob_a, odds_a)
-                if stake > 0:
-                    self.push_android_notification(match_title, round(edge_pct, 2), stake, odds_a)
+        # Calculate exact edge, regardless of whether it is positive or negative
+        raw_edge_pct = ((engine_prob_a - market_prob_a) + adjusted_edge_modifier) * 100
+        
+        # If edge is positive, calculate stake. Otherwise, recommend $0.
+        if raw_edge_pct > 0:
+            stake = self.calculate_kelly_criterion(engine_prob_a, odds_a)
+        else:
+            stake = 0.0
+            
+        # Unconditionally push the notification for ALL evaluated matches
+        self.push_android_notification(match_title, round(raw_edge_pct, 2), stake, odds_a)
