@@ -4,7 +4,7 @@ on:
   schedule:
     # Executes automatically every 4 hours to evaluate live lines.
     - cron: '0 */4 * * *'
-  workflow_dispatch: # Allows you to manually trigger a run with a button tap on GitHub
+  workflow_dispatch: # Allows you to manually trigger a run
 
 jobs:
   execute_pipeline:
@@ -14,7 +14,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Pulls full history for accurate rolling-window processing
+          fetch-depth: 0
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -27,6 +27,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Seeding Protocol and Model Calibration
+        run: |
+          python scripts/seed_and_train.py
+
       - name: Execute Master Pipeline
         run: |
           python src/main_runner.py
+
+      - name: Commit and Push Model Artifacts
+        run: |
+          git config --global user.name "GitHub Actions - Engine"
+          git config --global user.email "actions@github.com"
+          git add data/
+          git diff --quiet && git diff --staged --quiet || (git commit -m "[Auto] Update calibrated artifacts and latent states" && git push)
