@@ -2,6 +2,7 @@ name: Global Table Tennis Data Synchronization
 
 on:
   schedule:
+    # Execute daily at 00:00 UTC
     - cron: '0 0 * * *'
   workflow_dispatch: 
 
