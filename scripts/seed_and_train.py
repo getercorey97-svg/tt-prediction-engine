@@ -14,10 +14,27 @@ DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../data/table
 STATE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../data/latent_state.pkl"))
 MODEL_ARTIFACT_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../data/xgb_model_calibrated.pkl"))
 
+def migrate_db_schema(conn):
+    """Ensures all necessary columns exist in the SQLite database without crashing on legacy schemas."""
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(matches)")
+    columns = [row[1] for row in cursor.fetchall()]
+    
+    if columns:
+        if "schedule_density_diff" not in columns:
+            cursor.execute("ALTER TABLE matches ADD COLUMN schedule_density_diff REAL DEFAULT 0.0")
+        if "wttr_pos_diff" not in columns:
+            cursor.execute("ALTER TABLE matches ADD COLUMN wttr_pos_diff REAL DEFAULT 0.0")
+        if "wttr_points_diff" not in columns:
+            cursor.execute("ALTER TABLE matches ADD COLUMN wttr_points_diff REAL DEFAULT 0.0")
+        if "home_continent_adv" not in columns:
+            cursor.execute("ALTER TABLE matches ADD COLUMN home_continent_adv INTEGER DEFAULT 0")
+        if "recent_win_ratio_diff" not in columns:
+            cursor.execute("ALTER TABLE matches ADD COLUMN recent_win_ratio_diff REAL DEFAULT 0.0")
+        conn.commit()
+
 def bootstrap_historical_records(conn, target_matches=2000):
     cursor = conn.cursor()
-    
-    # Ensure table includes schedule_density_diff and wttr_pos_diff
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS matches (
             match_id TEXT PRIMARY KEY,
@@ -39,16 +56,18 @@ def bootstrap_historical_records(conn, target_matches=2000):
         )
     ''')
     conn.commit()
+    
+    migrate_db_schema(conn)
 
     cursor.execute("SELECT COUNT(*) FROM matches")
     current_count = cursor.fetchone()[0]
 
     needed = target_matches - current_count
     if needed <= 0:
-        print(f"[{datetime.now()}] Historical dataset satisfies burn-in criteria: {current_count} matches[span_3](start_span)[span_3](end_span).")
+        print(f"[{datetime.now()}] Historical dataset satisfies burn-in criteria: {current_count} matches.")
         return
 
-    print(f"[{datetime.now()}] Bootstrapping {needed} matches to complete the 2,000-match burn-in protocol[span_4](start_span)[span_4](end_span)...")
+    print(f"[{datetime.now()}] Bootstrapping {needed} matches to complete the 2,000-match burn-in protocol...")
     
     player_pool = [f"PL_{i:03d}" for i in range(1, 51)]
     base_date = datetime.now() - timedelta(days=700)
@@ -86,20 +105,35 @@ def bootstrap_historical_records(conn, target_matches=2000):
     ''', synthetic_rows)
 
     conn.commit()
-    print(f"[{datetime.now()}] Bootstrapping complete. Database contains >= {target_matches} matches[span_5](start_span)[span_5](end_span).")
+    print(f"[{datetime.now()}] Bootstrapping complete. Database contains >= {target_matches} matches.")
 
 def run_seeding_and_training():
-    print(f"[{datetime.now()}] Commencing Seeding Protocol & Model Calibration[span_6](start_span)[span_6](end_span)...")
+    print(f"[{datetime.now()}] Commencing Seeding Protocol & Model Calibration...")
     
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     bootstrap_historical_records(conn, target_matches=2000)
 
-    print(f"[{datetime.now()}] Updating Set-Weighted Elo, Glicko-2, and mElo vectors[span_7](start_span)[span_7](end_span)...")
+    print(f"[{datetime.now()}] Updating Set-Weighted Elo, Glicko-2, and mElo vectors...")
     tracker = DynamicLatentTracker(state_path=STATE_PATH)
     
     matches_df = pd.read_sql_query("SELECT * FROM matches ORDER BY date ASC", conn)
     
+    # Ensure all baseline differential columns exist in DataFrame
+    required_defaults = {
+        'schedule_density_diff': 0.0,
+        'wttr_pos_diff': 0.0,
+        'wttr_points_diff': 0.0,
+        'home_continent_adv': 0,
+        'recent_win_ratio_diff': 0.0,
+        'age_diff': 0.0,
+        'height_diff': 0.0,
+        'handedness_interaction': 0
+    }
+    for col_name, default_val in required_defaults.items():
+        if col_name not in matches_df.columns:
+            matches_df[col_name] = default_val
+
     glicko_diffs = []
     melo_dists = []
     markov_diffs = []
@@ -142,7 +176,7 @@ def run_seeding_and_training():
     matches_df['markov_match_win_prob_diff'] = markov_diffs
     matches_df['target_player_a_wins'] = targets
 
-    print(f"[{datetime.now()}] Training XGBoost ensemble with sequential rolling validation[span_8](start_span)[span_8](end_span)...")
+    print(f"[{datetime.now()}] Training XGBoost ensemble with sequential rolling validation...")
     xgb_engine = TableTennisXGBoost()
     
     feature_cols = [
@@ -152,6 +186,10 @@ def run_seeding_and_training():
         'home_continent_adv', 'recent_win_ratio_diff'
     ]
     
+    for feat in feature_cols:
+        if feat not in matches_df.columns:
+            matches_df[feat] = 0.0
+
     X = matches_df[feature_cols].copy()
     y = matches_df['target_player_a_wins'].copy()
     X.fillna(0.0, inplace=True)
