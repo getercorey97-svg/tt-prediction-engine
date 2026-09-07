@@ -7,7 +7,6 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.calibration import CalibratedClassifierCV
 import joblib
 
-# Robust pathing to ensure data/ folder is correctly located regardless of execution directory
 DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../data"))
 MODEL_ARTIFACT_PATH = os.path.join(DATA_DIR, "xgb_model_calibrated.pkl")
 
@@ -27,7 +26,7 @@ class TableTennisXGBoost:
     def engineer_differentials(self, df):
         """
         Transforms absolute player identities into relative strength differentials,
-        incorporating Schedule Density (Fatigue) and micro-stylistic metrics[span_0](start_span)[span_0](end_span).
+        incorporating Schedule Density (Fatigue) and micro-stylistic metrics[span_2](start_span)[span_2](end_span).
         """
         df['glicko_rating_diff'] = df['player_a_glicko'] - df['player_b_glicko']
         df['melo_vector_distance'] = np.linalg.norm(df['player_a_melo'] - df['player_b_melo'], axis=1)
@@ -40,7 +39,7 @@ class TableTennisXGBoost:
         # Schedule Density Differential (Sets played in past 48 hours)
         df['schedule_density_diff'] = df['player_a_sets_last_48h'] - df['player_b_sets_last_48h']
         
-        df['wttr_position_diff'] = df['player_a_wttr_pos'] - df['player_b_wttr_pos']
+        df['wttr_pos_diff'] = df['player_a_wttr_pos'] - df['player_b_wttr_pos']
         df['wttr_points_diff'] = df['player_a_wttr_points'] - df['player_b_wttr_points']
         
         df['home_continent_adv'] = df['player_a_home_continent'] - df['player_b_home_continent']
@@ -49,15 +48,12 @@ class TableTennisXGBoost:
         features = [
             'glicko_rating_diff', 'melo_vector_distance', 'markov_match_win_prob_diff',
             'age_diff', 'height_diff', 'handedness_interaction', 'schedule_density_diff',
-            'wttr_position_diff', 'wttr_points_diff',
+            'wttr_pos_diff', 'wttr_points_diff',
             'home_continent_adv', 'recent_win_ratio_diff'
         ]
         return df[features], df['target_player_a_wins']
 
     def train_with_rolling_validation(self, X, y):
-        """
-        Implements sequential rolling-window cross-validation to prevent look-ahead bias[span_1](start_span)[span_1](end_span).
-        """
         tscv = TimeSeriesSplit(n_splits=5)
         brier_scores = []
         log_losses = []
@@ -76,9 +72,6 @@ class TableTennisXGBoost:
         print(f"Average Log-Loss: {np.mean(log_losses):.5f}")
 
     def calibrate_and_save(self, X, y):
-        """
-        Applies cross-validated probability calibration and saves the artifact securely.
-        """
         os.makedirs(DATA_DIR, exist_ok=True)
         self.calibrated_model = CalibratedClassifierCV(self.model, method='isotonic', cv=3)
         self.calibrated_model.fit(X, y)
