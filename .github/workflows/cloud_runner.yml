@@ -3,7 +3,7 @@ name: Cloud Prediction Engine Scheduler
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/15 * * * *' # Automates the sequence every 15 minutes
+    - cron: '*/15 * * * *' # Executes autonomously every 15 minutes
 
 jobs:
   execute_pipeline:
@@ -18,20 +18,23 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Install Mathematical Dependencies
+      - name: Install Mathematical & ML Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Seeding Protocol & Model Calibration
+        run: python scripts/seed_and_train.py
+
       - name: Queue Live and Upcoming Matches
         run: python scripts/live_site_scraper.py
 
-      - name: Execute Pure Math Evaluator
+      - name: Execute Pure Math Synthesis & Evaluator
         run: python src/main_runner.py
 
-      - name: Commit and Push Database State
+      - name: Commit and Push Calibrated Artifacts & Databases
         run: |
           git config --global user.name "GitHub Actions - Engine"
           git config --global user.email "actions@github.com"
           git add data/
-          git diff --quiet && git diff --staged --quiet || (git commit -m "[Auto] Queue update and prediction cycle" && git push)
+          git diff --quiet && git diff --staged --quiet || (git commit -m "[Auto] Calibrate model, queue matches, and push predictions" && git push)
