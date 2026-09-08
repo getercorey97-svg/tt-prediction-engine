@@ -10,9 +10,14 @@ class UniversalMatchScraper:
     def __init__(self):
         os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
         self.conn = sqlite3.connect(DB_PATH)
-        self.api_url = "https://api.example.com/v1/ittf/rankings" 
+        
+        # Replace these with your actual odds/schedule API endpoints
+        self.rankings_api_url = "https://api.example.com/v1/ittf/rankings" 
+        self.upcoming_api_url = "https://api.example.com/v1/fixtures/upcoming"
+        
         self.api_headers = {"Authorization": "Bearer YOUR_API_KEY_HERE", "Content-Type": "application/json"}
         self.rankings_cache = {}
+        
         self.setup_database()
         self.preload_rankings()
 
@@ -28,18 +33,12 @@ class UniversalMatchScraper:
                 grip_interaction INTEGER, style_interaction INTEGER, is_live INTEGER DEFAULT 0
             )
         ''')
-        # Safely migrate schema to include new stylistic and form features
-        for col in ["grip_interaction", "style_interaction"]:
-            try:
-                cursor.execute(f"ALTER TABLE matches ADD COLUMN {col} INTEGER DEFAULT 0")
-            except sqlite3.OperationalError:
-                pass
         self.conn.commit()
 
     def preload_rankings(self):
         print(f"[{datetime.now()}] Pulling live ITTF rankings via JSON API...")
         try:
-            response = requests.get(self.api_url, headers=self.api_headers, timeout=5)
+            response = requests.get(self.rankings_api_url, headers=self.api_headers, timeout=5)
             if response.status_code == 200:
                 for player in response.json().get('data', []):
                     self.rankings_cache[player.get('player_name')] = {
@@ -48,8 +47,8 @@ class UniversalMatchScraper:
                         "age": player.get('age', 25), 
                         "hand": 1 if player.get('handedness', 'Right') == 'Right' else -1,
                         "height": player.get('height', 175),
-                        "grip": player.get('grip', 1), # 1: Shakehand, 0: Penhold
-                        "style": player.get('style', 1), # 1: Looper, 0: Chopper/Blocker
+                        "grip": player.get('grip', 1),
+                        "style": player.get('style', 1),
                         "recent_form": player.get('recent_win_ratio', 0.50)
                     }
         except requests.exceptions.RequestException:
@@ -59,66 +58,61 @@ class UniversalMatchScraper:
         if player_name in self.rankings_cache:
             return self.rankings_cache[player_name]
         
-        # Absolute Factual Baseline mapping for cold-start mitigation
-        factual_db = {
-            "Tomokazu Harimoto": {"rank": 3, "points": 6333, "age": 23, "hand": 1, "height": 175, "grip": 1, "style": 1, "recent_form": 0.85},
-            "Hugo Calderano": {"rank": 8, "points": 4060, "age": 30, "hand": 1, "height": 183, "grip": 1, "style": 1, "recent_form": 0.70},
-            "Satsuki Odo": {"rank": 12, "points": 3250, "age": 22, "hand": 1, "height": 160, "grip": 1, "style": 1, "recent_form": 0.75},
-            "Anton Kallberg": {"rank": 15, "points": 2000, "age": 29, "hand": 1, "height": 185, "grip": 1, "style": 1, "recent_form": 0.65},
-            "Samara Elizabeta": {"rank": 30, "points": 1200, "age": 37, "hand": -1, "height": 171, "grip": 1, "style": 1, "recent_form": 0.60},
-            "Nicholas Lum": {"rank": 35, "points": 800, "age": 21, "hand": -1, "height": 178, "grip": 1, "style": 1, "recent_form": 0.55},
-            "Kanak Jha": {"rank": 40, "points": 700, "age": 26, "hand": 1, "height": 170, "grip": 1, "style": 1, "recent_form": 0.70},
-            "Huang Youzheng": {"rank": 60, "points": 500, "age": 19, "hand": 1, "height": 174, "grip": 1, "style": 1, "recent_form": 0.60},
-            "Anna Hursey": {"rank": 95, "points": 400, "age": 20, "hand": -1, "height": 160, "grip": 1, "style": 1, "recent_form": 0.55},
-            "Manush Shah": {"rank": 100, "points": 300, "age": 25, "hand": -1, "height": 175, "grip": 1, "style": 1, "recent_form": 0.50},
-            "Leong On Na": {"rank": 400, "points": 100, "age": 22, "hand": 1, "height": 162, "grip": 0, "style": 0, "recent_form": 0.40},
-            "Mak Tin Ian": {"rank": 500, "points": 50, "age": 20, "hand": 1, "height": 170, "grip": 0, "style": 0, "recent_form": 0.35}
-        }
-        return factual_db.get(player_name, {"rank": 200, "points": 150, "age": 25, "hand": 1, "height": 175, "grip": 1, "style": 1, "recent_form": 0.50})
+        # Baseline fallback mapped to prevent cold-start anomalies
+        return {"rank": 200, "points": 150, "age": 25, "hand": 1, "height": 175, "grip": 1, "style": 1, "recent_form": 0.50}
 
     def fetch_global_board(self):
-        print(f"[{datetime.now()}] Scanning global networks for Live and Upcoming fixtures...")
+        print(f"[{datetime.now()}] Scanning global networks for Upcoming scheduled fixtures...")
         matches = []
         current_date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
         
-        global_fixtures = [
-            ("Anton Kallberg", "Manush Shah", "WTT Champions Macao"),
-            ("Mak Tin Ian", "Tomokazu Harimoto", "WTT Champions Macao"),
-            ("Nicholas Lum", "Hugo Calderano", "WTT Champions Macao"),
-            ("Kanak Jha", "Huang Youzheng", "WTT Champions Macao"),
-            ("Anna Hursey", "Leong On Na", "WTT Champions Macao"),
-            ("Satsuki Odo", "Samara Elizabeta", "WTT Champions Macao"),
-            ("Lukas Krupnik Jr", "Tadeas Slivka", "TT Cup"),
-            ("Vaclav Hejda Jr", "Ales Langer", "TT Cup"),
-            ("Grzegorz Poliniewicz", "Krzysztof Wloczko", "TT Elite Series"),
-            ("Bruno Mrowetz", "Radek Benes", "TT Cup"),
-            ("Skvarskyi Dmytro", "Mateusz Burkacki", "TT Elite Series"),
-            ("Oskar Jadach", "Kacper Adamus", "TT Elite Series"),
-            ("Adam Ruszkiewicz", "Milosz Cesarz", "TT Elite Series")
-        ]
-        
-        for pA, pB, tier in global_fixtures:
-            data_A = self.get_factual_player_data(pA)
-            data_B = self.get_factual_player_data(pB)
+        try:
+            # Polling the upcoming schedule API
+            response = requests.get(self.upcoming_api_url, headers=self.api_headers, timeout=10)
             
-            matches.append({
-                "match_id": f"FIX_{pA[:3]}_{pB[:3]}_{datetime.now().strftime('%H%M%S')}_{np.random.randint(100,999)}",
-                "date": current_date_str,
-                "player_a_id": pA,
-                "player_b_id": pB,
-                "set_score_a": 0, "set_score_b": 0, "tournament_tier": tier,
-                "age_diff": float(data_A["age"] - data_B["age"]),
-                "handedness_interaction": 1 if data_A["hand"] != data_B["hand"] else 0,
-                "height_diff": float(data_A["height"] - data_B["height"]),
-                "schedule_density_diff": 0.0,
-                "wttr_pos_diff": float(data_B["rank"] - data_A["rank"]), 
-                "wttr_points_diff": float(data_A["points"] - data_B["points"]),
-                "home_continent_adv": 0,
-                "recent_win_ratio_diff": float(data_A["recent_form"] - data_B["recent_form"]),
-                "grip_interaction": 1 if data_A["grip"] != data_B["grip"] else 0,
-                "style_interaction": 1 if data_A["style"] != data_B["style"] else 0,
-                "is_live": 1 if "WTT" in tier else 0
-            })
+            if response.status_code == 200:
+                # Assuming the API returns a JSON list of scheduled events
+                upcoming_data = response.json().get('events', [])
+                
+                for event in upcoming_data:
+                    # Filter for matches that have strictly not started
+                    if event.get('status') not in ['scheduled', 'not_started']:
+                        continue
+                        
+                    pA = event.get('player_a')
+                    pB = event.get('player_b')
+                    tier = event.get('tournament_tier', 'Unknown')
+                    
+                    data_A = self.get_factual_player_data(pA)
+                    data_B = self.get_factual_player_data(pB)
+                    
+                    matches.append({
+                        "match_id": f"UPCOMING_{pA[:3]}_{pB[:3]}_{event.get('start_time', '0000')}_{np.random.randint(1000,9999)}",
+                        "date": current_date_str,
+                        "player_a_id": pA,
+                        "player_b_id": pB,
+                        "set_score_a": 0, # Neutral 0-0 state for pre-match baseline
+                        "set_score_b": 0,
+                        "tournament_tier": tier,
+                        "age_diff": float(data_A["age"] - data_B["age"]),
+                        "handedness_interaction": 1 if data_A["hand"] != data_B["hand"] else 0,
+                        "height_diff": float(data_A["height"] - data_B["height"]),
+                        "schedule_density_diff": 0.0,
+                        "wttr_pos_diff": float(data_B["rank"] - data_A["rank"]), 
+                        "wttr_points_diff": float(data_A["points"] - data_B["points"]),
+                        "home_continent_adv": 0,
+                        "recent_win_ratio_diff": float(data_A["recent_form"] - data_B["recent_form"]),
+                        "grip_interaction": 1 if data_A["grip"] != data_B["grip"] else 0,
+                        "style_interaction": 1 if data_A["style"] != data_B["style"] else 0,
+                        "is_live": 0 # Explicitly flags the match as not started
+                    })
+                print(f"[{datetime.now()}] API pulled {len(matches)} scheduled fixtures.")
+            else:
+                print(f"[{datetime.now()}] API Error {response.status_code}. Please verify endpoint status.")
+                
+        except requests.exceptions.RequestException as e:
+            print(f"[{datetime.now()}] Connection error: {e}.")
+
         return matches
 
     def save_to_database(self, matches):
@@ -145,7 +139,7 @@ class UniversalMatchScraper:
                 pass
         self.conn.commit()
         self.conn.close()
-        print(f"[{datetime.now()}] Successfully stored {added_count} live API matches with stylistic features.")
+        print(f"[{datetime.now()}] Successfully stored {added_count} upcoming API matches.")
 
 if __name__ == "__main__":
     scraper = UniversalMatchScraper()
