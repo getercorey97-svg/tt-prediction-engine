@@ -6,6 +6,7 @@ from datetime import datetime
 import xgboost as xgb
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.calibration import CalibratedClassifierCV
+from sklearn.frozen import FrozenEstimator
 from sklearn.metrics import brier_score_loss, log_loss
 import joblib
 import warnings
@@ -80,8 +81,8 @@ def seed_and_train():
         base_xgb.fit(X_train, y_train)
         
         # 2. Probability Calibration (Platt Scaling)
-        # Post-processing the predictions via a sigmoid function to minimize log-loss
-        calibrated_xgb = CalibratedClassifierCV(estimator=base_xgb, method='sigmoid', cv='prefit')
+        # Wrap the fitted estimator in FrozenEstimator to conform to scikit-learn 1.4+ standards
+        calibrated_xgb = CalibratedClassifierCV(estimator=FrozenEstimator(base_xgb), method='sigmoid')
         calibrated_xgb.fit(X_train, y_train)
         
         preds = calibrated_xgb.predict_proba(X_test)[:, 1]
@@ -96,7 +97,7 @@ def seed_and_train():
     
     # Train and calibrate final production model on the entire stabilized dataset
     base_xgb.fit(X, y)
-    final_calibrated = CalibratedClassifierCV(estimator=base_xgb, method='sigmoid', cv='prefit')
+    final_calibrated = CalibratedClassifierCV(estimator=FrozenEstimator(base_xgb), method='sigmoid')
     final_calibrated.fit(X, y)
     
     # Output the calibrated model artifact for the master runner to ingest
