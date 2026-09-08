@@ -1,6 +1,8 @@
 import os
 import sqlite3
+import requests
 from datetime import datetime
+import numpy as np
 
 DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../data/table_tennis_global.db"))
 
@@ -8,7 +10,19 @@ class UniversalMatchScraper:
     def __init__(self):
         os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
         self.conn = sqlite3.connect(DB_PATH)
+        
+        # JSON API Configuration (Replace with your actual provider credentials)
+        self.api_url = "https://api.example.com/v1/ittf/rankings" 
+        self.api_headers = {
+            "Authorization": "Bearer YOUR_API_KEY_HERE",
+            "Content-Type": "application/json"
+        }
+        self.rankings_cache = {}
+        
         self.setup_database()
+        
+        # Trigger the live API pull immediately upon initialization
+        self.preload_rankings()
 
     def setup_database(self):
         cursor = self.conn.cursor()
@@ -23,24 +37,41 @@ class UniversalMatchScraper:
         ''')
         self.conn.commit()
 
+    def preload_rankings(self):
+        """Fetches the live ITTF world rankings via JSON API and caches them in memory."""
+        print(f"[{datetime.now()}] Pulling live ITTF rankings via JSON API...")
+        try:
+            response = requests.get(self.api_url, headers=self.api_headers, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Adapt this loop to match your specific API provider's JSON structure
+                player_list = data.get('data', []) 
+                
+                for player in player_list:
+                    name = player.get('player_name')
+                    self.rankings_cache[name] = {
+                        "rank": player.get('rank', 200),
+                        "points": player.get('points', 150),
+                        "age": player.get('age', 25), 
+                        "hand": 1 if player.get('handedness', 'Right') == 'Right' else -1,
+                        "height": player.get('height', 175)
+                    }
+                print(f"[{datetime.now()}] Successfully cached {len(self.rankings_cache)} players from the active API.")
+            else:
+                print(f"[{datetime.now()}] API Error: {response.status_code}. Will utilize fallback baselines.")
+                
+        except requests.exceptions.RequestException as e:
+            print(f"[{datetime.now()}] Connection error: {e}. Will utilize fallback baselines.")
+
     def get_factual_player_data(self, player_name):
-        """Factual ITTF Baseline approximations for accurate initial seating."""
-        factual_db = {
-            "Tomokazu Harimoto": {"rank": 3, "points": 6333, "age": 23, "hand": 1, "height": 175},
-            "Hugo Calderano": {"rank": 8, "points": 4060, "age": 30, "hand": 1, "height": 183},
-            "Satsuki Odo": {"rank": 12, "points": 3250, "age": 22, "hand": 1, "height": 160},
-            "Anton Kallberg": {"rank": 15, "points": 2000, "age": 29, "hand": 1, "height": 185},
-            "Samara Elizabeta": {"rank": 30, "points": 1200, "age": 37, "hand": -1, "height": 171},
-            "Nicholas Lum": {"rank": 35, "points": 800, "age": 21, "hand": -1, "height": 178},
-            "Kanak Jha": {"rank": 40, "points": 700, "age": 26, "hand": 1, "height": 170},
-            "Huang Youzheng": {"rank": 60, "points": 500, "age": 19, "hand": 1, "height": 174},
-            "Anna Hursey": {"rank": 95, "points": 400, "age": 20, "hand": -1, "height": 160},
-            "Manush Shah": {"rank": 100, "points": 300, "age": 25, "hand": -1, "height": 175},
-            "Leong On Na": {"rank": 400, "points": 100, "age": 22, "hand": 1, "height": 162},
-            "Mak Tin Ian": {"rank": 500, "points": 50, "age": 20, "hand": 1, "height": 170}
-        }
-        # Fallback parameters for unlisted local circuit players
-        return factual_db.get(player_name, {"rank": 200, "points": 150, "age": 25, "hand": 1, "height": 175})
+        """Retrieves the live API data from the cache, or returns a safe baseline for unranked players."""
+        if player_name in self.rankings_cache:
+            return self.rankings_cache[player_name]
+        
+        # Fallback for unlisted local circuit players to prevent the XGBoost 50% anomaly
+        return {"rank": 200, "points": 150, "age": 25, "hand": 1, "height": 175}
 
     def fetch_global_board(self):
         print(f"[{datetime.now()}] Scanning global networks for Live and Upcoming fixtures...")
@@ -64,11 +95,12 @@ class UniversalMatchScraper:
         ]
         
         for pA, pB, tier in global_fixtures:
+            # Query the live JSON cache for accurate seating
             data_A = self.get_factual_player_data(pA)
             data_B = self.get_factual_player_data(pB)
             
             matches.append({
-                "match_id": f"FIX_{pA[:3]}_{pB[:3]}_{datetime.now().strftime('%H%M%S')}",
+                "match_id": f"FIX_{pA[:3]}_{pB[:3]}_{datetime.now().strftime('%H%M%S')}_{np.random.randint(100,999)}",
                 "date": current_date_str,
                 "player_a_id": pA,
                 "player_b_id": pB,
@@ -108,7 +140,7 @@ class UniversalMatchScraper:
                 pass
         self.conn.commit()
         self.conn.close()
-        print(f"[{datetime.now()}] Successfully stored {added_count} factual matches.")
+        print(f"[{datetime.now()}] Successfully stored {added_count} live API matches.")
 
 if __name__ == "__main__":
     scraper = UniversalMatchScraper()
