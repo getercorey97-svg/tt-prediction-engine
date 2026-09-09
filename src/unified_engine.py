@@ -92,12 +92,25 @@ class LearningCore:
         self.state = self.load_state()
 
     def load_state(self):
-        default = {"players": {}, "tier_priors": {"default": {"mean": 1500.0, "var": 40000.0}}}
+        default = {
+            "players": {}, 
+            "tier_priors": {"default": {"mean": 1500.0, "var": 40000.0}},
+            "global_brier_history": []
+        }
         if os.path.exists(STATE_PATH):
             try:
                 with open(STATE_PATH, "rb") as f:
-                    return pickle.load(f)
-            except Exception: pass
+                    data = pickle.load(f)
+                    if isinstance(data, dict):
+                        if "tier_priors" not in data:
+                            data["tier_priors"] = {"default": {"mean": 1500.0, "var": 40000.0}}
+                        if "players" not in data:
+                            data["players"] = {}
+                        if "global_brier_history" not in data:
+                            data["global_brier_history"] = []
+                        return data
+            except Exception:
+                pass
         return default
 
     def save_state(self):
@@ -109,7 +122,8 @@ class LearningCore:
             "rating": 1500.0, "rd": 350.0, "melo": [0.0, 0.0],
             "spw": 0.50, "rpw": 0.50, "matches": 0
         })
-        prior = self.state["tier_priors"].get(tier, self.state["tier_priors"]["default"])
+        priors = self.state.setdefault("tier_priors", {"default": {"mean": 1500.0, "var": 40000.0}})
+        prior = priors.get(tier, priors.get("default", {"mean": 1500.0, "var": 40000.0}))
         variance = max(player["rd"] ** 2, 1.0)
         shrinkage_weight = prior["var"] / (prior["var"] + variance)
         shrunk_rating = (shrinkage_weight * player["rating"]) + ((1.0 - shrinkage_weight) * prior["mean"])
@@ -123,7 +137,7 @@ class LearningCore:
         brier = (pred_p - y) ** 2
         clv_err = abs(pred_p - implied_p) if implied_p else 0.0
 
-        k_base = 40.0 if score in ["3-0", "0-3"] else (30.0 if score in ["3-1", "1-3"] else 20.0)
+        k_base = 40.0 if score in ["3-0", "0-3"] else (30.0 if score in ["3-1", "1-3"] else 20.0)[span_1](start_span)[span_1](end_span)
         k_eff = k_base * (1.0 + (brier * 0.5) - (clv_err * 0.2))
 
         dA["rating"] += k_eff * (y - pred_p)
@@ -133,8 +147,8 @@ class LearningCore:
 
         va, vb = np.array(dA["melo"]), np.array(dB["melo"])
         grad = y - pred_p
-        dA["melo"] = (va + 0.02 * grad * (self.sim.Omega @ vb)).tolist()
-        dB["melo"] = (vb - 0.02 * grad * (self.sim.Omega @ va)).tolist()
+        dA["melo"] = (va + 0.02 * grad * (self.sim.Omega @ vb)).tolist()[span_2](start_span)[span_2](end_span)
+        dB["melo"] = (vb - 0.02 * grad * (self.sim.Omega @ va)).tolist()[span_3](start_span)[span_3](end_span)
 
         dA["matches"] += 1
         dB["matches"] += 1
@@ -182,7 +196,7 @@ class UnifiedPipeline:
         self.core = LearningCore()
         self.sim = SimulationEngine()
 
-    def evaluate_match(self, pA, pB, tier="WTT/Challenger", is_fanduel=1):
+    def evaluate_match(self, pA, pB, tier="default", is_fanduel=1):
         DatabaseManager.initialize()
         if not os.path.exists(MODEL_PATH):
             EnsemblePipeline.train_stacked_meta_learner()
@@ -192,7 +206,7 @@ class UnifiedPipeline:
         rB, dB = self.core.get_bayesian_rating(pB, tier)
         style_adv = self.sim.calculate_style_advantage(dA["melo"], dB["melo"])
 
-        set_dist = self.sim.run_50k_simulations(dA["spw"], dB["spw"])
+        set_dist = self.sim.run_50k_simulations(dA["spw"], dB["spw"])[span_4](start_span)[span_4](end_span)
         p_math = set_dist["3-0"] + set_dist["3-1"] + set_dist["3-2"]
 
         features = pd.DataFrame([{
