@@ -64,7 +64,6 @@ class SimulationEngine:
         return float(np.array(va[:2]).T @ self.Omega @ np.array(vb[:2]))
 
     def run_50k_simulations(self, spw_a, spw_b, sets_a=0, sets_b=0, momentum=0.0):
-        """Simulates 50,000 matches with micro-momentum and point absorption."""
         pA = np.clip(spw_a + (momentum * 0.04), 0.10, 0.90)
         pB = np.clip(spw_b - (momentum * 0.04), 0.10, 0.90)
         p_set_a = np.clip((pA * (1 - pB)) / (pA * (1 - pB) + pB * (1 - pA) + 1e-4), 0.05, 0.95)
@@ -106,14 +105,11 @@ class LearningCore:
             pickle.dump(self.state, f)
 
     def get_bayesian_rating(self, pid, tier="default"):
-        """Applies empirical Bayes shrinkage to pull low-sample players toward the prior."""
         player = self.state["players"].get(pid, {
             "rating": 1500.0, "rd": 350.0, "melo": [0.0, 0.0],
-            "spw": 0.50, "rpw": 0.50, "matches": 0, "last_active": None
+            "spw": 0.50, "rpw": 0.50, "matches": 0
         })
         prior = self.state["tier_priors"].get(tier, self.state["tier_priors"]["default"])
-        
-        # Empirical Bayes weight shrinkage: w = tau^2 / (tau^2 + sigma^2)
         variance = max(player["rd"] ** 2, 1.0)
         shrinkage_weight = prior["var"] / (prior["var"] + variance)
         shrunk_rating = (shrinkage_weight * player["rating"]) + ((1.0 - shrinkage_weight) * prior["mean"])
@@ -127,7 +123,6 @@ class LearningCore:
         brier = (pred_p - y) ** 2
         clv_err = abs(pred_p - implied_p) if implied_p else 0.0
 
-        # Set-Weighted K-factor dynamically scaled by CLV alignment
         k_base = 40.0 if score in ["3-0", "0-3"] else (30.0 if score in ["3-1", "1-3"] else 20.0)
         k_eff = k_base * (1.0 + (brier * 0.5) - (clv_err * 0.2))
 
@@ -136,7 +131,6 @@ class LearningCore:
         dA["rd"] = max(50.0, dA["rd"] * 0.98)
         dB["rd"] = max(50.0, dB["rd"] * 0.98)
 
-        # Style Vector Rotation
         va, vb = np.array(dA["melo"]), np.array(dB["melo"])
         grad = y - pred_p
         dA["melo"] = (va + 0.02 * grad * (self.sim.Omega @ vb)).tolist()
@@ -148,7 +142,7 @@ class LearningCore:
         return brier, clv_err
 
 # =====================================================================
-# 4. ENSEMBLE META-LEARNER (XGBoost + LightGBM + RF)
+# 4. ENSEMBLE META-LEARNER
 # =====================================================================
 class EnsemblePipeline:
     @staticmethod
@@ -168,21 +162,20 @@ class EnsemblePipeline:
         y = (1.0 / (1.0 + np.exp(-logit + np.random.normal(0, 0.4, N))) > 0.5).astype(int)
 
         base_models = [
-            ('xgb', xgb.XGBClassifier(n_estimators=100, max_depth=3, learning_rate=0.05, eval_metric='logloss')),
-            ('hgb', HistGradientBoostingClassifier(max_iter=100, learning_rate=0.05)),
-            ('rf', RandomForestClassifier(n_estimators=80, max_depth=4, random_state=42))
+            ('xgb', xgb.XGBClassifier(n_estimators=80, max_depth=3, learning_rate=0.05, eval_metric='logloss')),
+            ('hgb', HistGradientBoostingClassifier(max_iter=80, learning_rate=0.05)),
+            ('rf', RandomForestClassifier(n_estimators=60, max_depth=4, random_state=42))
         ]
         
-        stack = StackingClassifier(estimators=base_models, final_estimator=LogisticRegression(), cv=5)
-        stack.fit(X, y)
-        calibrated_stack = CalibratedClassifierCV(estimator=stack, method='isotonic', cv='prefit')
+        stack = StackingClassifier(estimators=base_models, final_estimator=LogisticRegression(), cv=3)
+        calibrated_stack = CalibratedClassifierCV(estimator=stack, method='isotonic', cv=3)
         calibrated_stack.fit(X, y)
 
         joblib.dump(calibrated_stack, MODEL_PATH)
         print(f"[{datetime.now()}] Ensemble meta-learner successfully saved.")
 
 # =====================================================================
-# 5. LIVE 50K INFERENCE & AUTONOMOUS LOOP
+# 5. LIVE 50K INFERENCE & PIPELINE
 # =====================================================================
 class UnifiedPipeline:
     def __init__(self):
@@ -199,7 +192,6 @@ class UnifiedPipeline:
         rB, dB = self.core.get_bayesian_rating(pB, tier)
         style_adv = self.sim.calculate_style_advantage(dA["melo"], dB["melo"])
 
-        # Running 50,000 simulation passes per prediction
         set_dist = self.sim.run_50k_simulations(dA["spw"], dB["spw"])
         p_math = set_dist["3-0"] + set_dist["3-1"] + set_dist["3-2"]
 
@@ -216,7 +208,6 @@ class UnifiedPipeline:
         winner = pA if prob_a >= 0.50 else pB
         confidence = prob_a if prob_a >= 0.50 else (1.0 - prob_a)
 
-        # Dispatch Alert for high-confidence FanDuel boards
         if is_fanduel:
             dist_str = f"3-0: {set_dist['3-0']*100:.1f}% | 3-1: {set_dist['3-1']*100:.1f}% | 3-2: {set_dist['3-2']*100:.1f}%"
             msg = f"FANDUEL SELECTION (50k Sims)\nMatch: {pA} vs {pB}\nPick: {winner} ({confidence*100:.2f}%)\nDist: {dist_str}"
@@ -230,8 +221,8 @@ class UnifiedPipeline:
 # =====================================================================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--auto", action="store_true", help="Run 15-minute pipeline")
-    parser.add_argument("--predict", nargs=2, metavar=('A', 'B'), help="Run 50k prediction on a matchup")
+    parser.add_argument("--auto", action="store_true", help="Run autonomous cycle")
+    parser.add_argument("--predict", nargs=2, metavar=('A', 'B'), help="Run 50k prediction")
     parser.add_argument("--train", action="store_true", help="Retrain stacked ensemble")
     args = parser.parse_args()
 
@@ -243,6 +234,5 @@ if __name__ == "__main__":
         print(f"\n[PREDICTION RESULT] Winner: {w} | Confidence: {conf*100:.2f}%")
         print(f"50,000-Sim Set Distribution: {dist}\n")
     else:
-        print("Executing Autonomous Cycle with 50,000 Simulations...")
         DatabaseManager.initialize()
         pipeline.evaluate_match("Tomokazu Harimoto", "Hugo Calderano")
