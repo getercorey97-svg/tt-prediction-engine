@@ -98,12 +98,23 @@ class LearningCore:
         self.state = self.load_state()
 
     def load_state(self):
-        default = {"players": {}, "tier_priors": {"default": {"mean": 1500.0, "var": 40000.0}}, "correlation_matrix": {}}
+        default = {
+            "players": {}, 
+            "tier_priors": {"default": {"mean": 1500.0, "var": 40000.0}}, 
+            "correlation_matrix": {}
+        }
         if os.path.exists(STATE_PATH):
             try:
                 with open(STATE_PATH, "rb") as f:
-                    return pickle.load(f)
-            except Exception: pass
+                    loaded = pickle.load(f)
+                    if isinstance(loaded, dict):
+                        # Safely ensure all expected keys exist to prevent KeyErrors from legacy files
+                        loaded.setdefault("tier_priors", default["tier_priors"])
+                        loaded.setdefault("players", {})
+                        loaded.setdefault("correlation_matrix", {})
+                        return loaded
+            except Exception: 
+                pass
         return default
 
     def save_state(self):
@@ -111,12 +122,14 @@ class LearningCore:
             pickle.dump(self.state, f)
 
     def get_bayesian_rating(self, pid, tier="default"):
-        """Applies empirical Bayes shrinkage to stabilize low-sample ratings."""
+        """Applies empirical Bayes shrinkage to stabilize low-sample ratings with fallback safety."""
         player = self.state["players"].get(pid, {
             "rating": 1500.0, "rd": 350.0, "melo": [0.0, 0.0],
             "spw": 0.50, "rpw": 0.50, "matches": 0
         })
-        prior = self.state["tier_priors"].get(tier, self.state["tier_priors"]["default"])
+        tier_priors = self.state.get("tier_priors", {"default": {"mean": 1500.0, "var": 40000.0}})
+        prior = tier_priors.get(tier, tier_priors.get("default", {"mean": 1500.0, "var": 40000.0}))
+        
         variance = max(player["rd"] ** 2, 1.0)
         shrinkage_weight = prior["var"] / (prior["var"] + variance)
         shrunk_rating = (shrinkage_weight * player["rating"]) + ((1.0 - shrinkage_weight) * prior["mean"])
