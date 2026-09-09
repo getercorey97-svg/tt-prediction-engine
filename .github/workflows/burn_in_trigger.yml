@@ -1,0 +1,32 @@
+name: Execute Seeding Protocol
+
+on:
+  workflow_dispatch:
+
+jobs:
+  burn-in:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Burn-In Protocol
+        run: python scripts/burn_in_seeder.py
+
+      - name: Commit Stabilized Brain State
+        run: |
+          git config --global user.name "GitHub Actions - Engine"
+          git config --global user.email "actions@github.com"
+          git add data/
+          git diff --quiet && git diff --staged --quiet || (git commit -m "[Auto] Complete 2,500 match burn-in" && git push)
