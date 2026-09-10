@@ -151,7 +151,6 @@ class LearningCore:
     def get_bayesian_rating(self, pid):
         self.register_player(pid)
         player = self.state["players"][pid]
-        # Simplified empirical Bayes shrinkage
         variance = max(player["rd"] ** 2, 1.0)
         shrinkage_weight = 40000.0 / (40000.0 + variance)
         shrunk_rating = (shrinkage_weight * player["rating"]) + ((1.0 - shrinkage_weight) * 1500.0)
@@ -226,7 +225,7 @@ class ModelOrchestrator:
         np.random.seed(42)
         N = 2500
         
-        # Build exact 16-feature matrix to perfectly match LiveEvaluator
+        # Build exact 16-feature matrix to perfectly match inference
         X = pd.DataFrame({
             'glicko_rating_diff': np.random.normal(0, 75, N), 
             'melo_vector_distance': np.random.uniform(0, 1.5, N),
@@ -244,7 +243,7 @@ class ModelOrchestrator:
             'style_advantage': np.random.normal(0, 0.5, N),
             'momentum_index': np.random.normal(0, 0.25, N),
             'air_density': np.random.normal(1.225, 0.03, N)
-        })
+        })[FEATURE_COLS]
 
         logit = (0.018 * X['glicko_rating_diff'] + 1.10 * X['markov_match_win_prob_diff'] + 
                  1.20 * X['style_advantage'] + np.random.normal(0, 0.8, N))
@@ -256,7 +255,6 @@ class ModelOrchestrator:
             ('rf', RandomForestClassifier(n_estimators=80, max_depth=4, random_state=42))
         ]
         
-        # Native Stacking without FrozenEstimator to prevent NotFittedError paradox
         stack = StackingClassifier(estimators=base_models, final_estimator=LogisticRegression(), cv=3)
         calibrated_stack = CalibratedClassifierCV(estimator=stack, method='isotonic', cv=3)
         calibrated_stack.fit(X, y)
@@ -332,7 +330,6 @@ class LiveEvaluator:
         self.sim = CombinatorialEngine()
 
     def _build_feature_vector(self, pA, pB, row_dict=None):
-        """Universal vector constructor to guarantee training/inference symmetry."""
         if row_dict is None: row_dict = {}
         
         rA, dA = self.core.get_bayesian_rating(pA)
@@ -350,7 +347,6 @@ class LiveEvaluator:
         )
         p_math = set_dist["3-0"] + set_dist["3-1"] + set_dist["3-2"]
         
-        # Exact 16 columns matching ModelOrchestrator
         features = pd.DataFrame([{
             'glicko_rating_diff': float(rA - rB),
             'melo_vector_distance': float(np.linalg.norm(np.array(dA["melo_vector"]) - np.array(dB["melo_vector"]))),
@@ -368,14 +364,29 @@ class LiveEvaluator:
             'style_advantage': float(style_adv),
             'momentum_index': float(momentum),
             'air_density': float(air_density)
-        }])[FEATURE_COLS] # Strictly enforce column order
+        }])[FEATURE_COLS] 
         
         return features, set_dist
 
+    def _verify_model_alignment(self):
+        """Dynamic Validation Check: Prevents mismatches by forcing a retrain if cached model is stale."""
+        if not os.path.exists(MODEL_PATH):
+            ModelOrchestrator.train_and_calibrate()
+            return joblib.load(MODEL_PATH)
+            
+        try:
+            model = joblib.load(MODEL_PATH)
+            dummy_features = pd.DataFrame(np.zeros((1, len(FEATURE_COLS))), columns=FEATURE_COLS)
+            model.predict_proba(dummy_features)
+            return model
+        except (ValueError, FileNotFoundError, AttributeError):
+            print(f"[{datetime.now()}] Feature matrix mismatch or model missing. Forcing recalibration...")
+            ModelOrchestrator.train_and_calibrate()
+            return joblib.load(MODEL_PATH)
+
     def evaluate_board(self):
         DatabaseManager.initialize()
-        if not os.path.exists(MODEL_PATH): ModelOrchestrator.train_and_calibrate()
-        model = joblib.load(MODEL_PATH)
+        model = self._verify_model_alignment()
 
         with DatabaseManager.get_connection() as conn:
             cursor = conn.cursor()
@@ -404,10 +415,7 @@ class LiveEvaluator:
             conn.commit()
 
     def evaluate_match_manual(self, pA, pB):
-        """CLI manual override."""
-        if not os.path.exists(MODEL_PATH): ModelOrchestrator.train_and_calibrate()
-        model = joblib.load(MODEL_PATH)
-        
+        model = self._verify_model_alignment()
         features, set_dist = self._build_feature_vector(pA, pB)
         prob_a = float(model.predict_proba(features)[0, 1])
         
