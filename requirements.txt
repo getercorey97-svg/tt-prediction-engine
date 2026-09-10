@@ -1,21 +1,13 @@
-# Predictive Ensembles & Machine Learning
 xgboost>=2.0.0
-scikit-learn>=1.3.0
+scikit-learn>=1.4.0
 scipy>=1.11.0
-
-# Mathematical Core & Latent Variable Tracking
-glicko2>=2.0.0
-mElo>=0.1.0
-
-# Betting Market Calibration
-shin>=0.1.2
-goto-conversion>=0.0.2
-
-# Data Manipulation & Operations
 pandas>=2.1.0
 numpy>=1.26.0
-
-# Termux API & Edge Orchestration
-termux-api>=0.1.0
 requests>=2.31.0
+requests-cache>=1.1.0
+retry-requests>=2.0.0
+openmeteo-requests>=1.1.0
+shin>=0.1.2
+goto-conversion>=0.0.2
+joblib>=1.3.0
 pytz>=2023.3
