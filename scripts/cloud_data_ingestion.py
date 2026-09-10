@@ -1,119 +1,122 @@
 import os
-import json
 import sqlite3
 import requests
-import pandas as pd
+import numpy as np
 from datetime import datetime
 
-# Pathing for GitHub Actions continuous integration
-DB_PATH = os.path.join(os.path.dirname(__file__), "../data/table_tennis_global.db")
-API_ENDPOINT = "https://api.example-sports-data.com/v1/table-tennis/results" # Placeholder for live JSON endpoint
+DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../data/table_tennis_global.db"))
 
-class AutonomousIngestionEngine:
+class GlobalBoardScraper:
     def __init__(self):
         os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
         self.conn = sqlite3.connect(DB_PATH)
         self.setup_database()
 
     def setup_database(self):
-        """Initializes the SQLite database schema for the data lake."""
         cursor = self.conn.cursor()
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS matches (
-                match_id TEXT PRIMARY KEY,
-                date TEXT,
-                player_a_id TEXT,
-                player_b_id TEXT,
-                set_score_a INTEGER,
-                set_score_b INTEGER,
-                processed INTEGER DEFAULT 0,
-                age_diff REAL,
-                handedness_interaction INTEGER,
-                height_diff REAL,
-                wttr_pos_diff REAL,
-                wttr_points_diff REAL,
-                tournament_tier TEXT,
-                home_continent_adv INTEGER,
-                recent_win_ratio_diff REAL
+                match_id TEXT PRIMARY KEY, date TEXT, player_a_id TEXT, player_b_id TEXT,
+                set_score_a INTEGER DEFAULT 0, set_score_b INTEGER DEFAULT 0,
+                is_fanduel INTEGER DEFAULT 0, is_live INTEGER DEFAULT 0, processed INTEGER DEFAULT 0,
+                predicted_prob_a REAL, actual_winner TEXT, final_set_score TEXT,
+                closing_odds_a REAL, closing_odds_b REAL, implied_prob_a REAL, 
+                clv_error REAL, brier_error REAL, tournament_tier TEXT DEFAULT 'TT Cup',
+                age_diff REAL DEFAULT 0.0, height_diff REAL DEFAULT 0.0,
+                spw_diff REAL DEFAULT 0.0, rpw_diff REAL DEFAULT 0.0, 
+                style_advantage REAL DEFAULT 0.0, momentum_index REAL DEFAULT 0.0,
+                air_density REAL DEFAULT 1.225, unforced_error_diff REAL DEFAULT 0.0
             )
         ''')
         self.conn.commit()
 
-    def fetch_daily_results(self):
-        """Polls the JSON REST API for finalized matches."""
+    def fetch_environmental_density(self):
+        """Fetches live temperature and pressure to calculate barometric air density."""
         try:
-            # Using a generic request structure that applies to standard JSON sports APIs
-            # headers = {"Authorization": f"Bearer {os.environ.get('API_KEY')}"}
-            # response = requests.get(API_ENDPOINT, headers=headers)
-            # data = response.json()
+            url = "https://api.open-meteo.com/v1/forecast?latitude=22.1987&longitude=113.5439&current=temperature_2m,relative_humidity_2m,surface_pressure"
+            r = requests.get(url, timeout=3).json()
+            curr = r.get("current", {})
+            temp = curr.get("temperature_2m", 22.0)
+            rh = curr.get("relative_humidity_2m", 50.0)
+            press = curr.get("surface_pressure", 1013.25)
             
-            # MOCK DATA PAYLOAD to represent a successful API response
-            print(f"[{datetime.now()}] Polling global JSON API for match results...")
-            data = {
-                "events": [{
-                    "match_id": "WTT_2026_09_07_01",
-                    "date": "2026-09-07",
-                    "tournament_tier": "Pro Tour",
-                    "player_a": {"id": "1001", "score": 3, "age": 25, "height": 180, "hand": "R", "wttr_pos": 4, "wttr_pts": 3200, "continent": "Asia"},
-                    "player_b": {"id": None, "score": 1, "age": 19, "height": 175, "hand": "L", "wttr_pos": None, "wttr_pts": 0, "continent": "Europe"}
-                }]
-            }
-            return data.get('events', [])
-        except Exception as e:
-            print(f"[{datetime.now()}] API Polling Failed: {e}")
-            return []
+            # Tetens equation for vapor pressure
+            p_total = press * 100.0
+            e_sat = 6.1078 * (10.0 ** ((7.5 * temp) / (237.3 + temp))) * 100.0
+            pv = (rh / 100.0) * e_sat
+            pd = p_total - pv
+            return float((pd / (287.058 * (temp + 273.15))) + (pv / (461.495 * (temp + 273.15))))
+        except Exception:
+            return 1.225
 
-    def encode_rookie_proxy(self, player_data):
-        """Encodes unknown rookies to 999999 to safely quarantine unknown strength variances."""
-        if player_data.get('id') is None or player_data.get('wttr_pos') is None:
-            player_data['id'] = "999999"
-            player_data['wttr_pos'] = 999999
-        return player_data
+    def get_player_metadata(self, name):
+        roster = {
+            "Tomokazu Harimoto": {"age": 23, "height": 175, "spw": 0.62, "rpw": 0.54, "tier": "WTT"},
+            "Hugo Calderano": {"age": 30, "height": 183, "spw": 0.60, "rpw": 0.51, "tier": "WTT"},
+            "Satsuki Odo": {"age": 22, "height": 160, "spw": 0.59, "rpw": 0.53, "tier": "WTT"},
+            "Anton Kallberg": {"age": 29, "height": 185, "spw": 0.58, "rpw": 0.49, "tier": "WTT"},
+            "Samara Elizabeta": {"age": 37, "height": 171, "spw": 0.55, "rpw": 0.48, "tier": "WTT"},
+            "Nicholas Lum": {"age": 21, "height": 178, "spw": 0.54, "rpw": 0.47, "tier": "WTT"},
+            "Kanak Jha": {"age": 26, "height": 170, "spw": 0.57, "rpw": 0.50, "tier": "WTT"},
+            "Huang Youzheng": {"age": 19, "height": 174, "spw": 0.56, "rpw": 0.48, "tier": "WTT"},
+            "Anna Hursey": {"age": 20, "height": 160, "spw": 0.53, "rpw": 0.47, "tier": "WTT"},
+            "Manush Shah": {"age": 25, "height": 175, "spw": 0.52, "rpw": 0.46, "tier": "WTT"},
+            "Leong On Na": {"age": 22, "height": 162, "spw": 0.49, "rpw": 0.43, "tier": "WTT"},
+            "Mak Tin Ian": {"age": 20, "height": 170, "spw": 0.48, "rpw": 0.42, "tier": "WTT"},
+            "Kirill Fadeev": {"age": 23, "height": 175, "spw": 0.53, "rpw": 0.48, "tier": "Challenger"},
+            "Cosmo Schmitt": {"age": 25, "height": 177, "spw": 0.51, "rpw": 0.46, "tier": "Challenger"},
+            "Grzegorz Poliniewicz": {"age": 28, "height": 178, "spw": 0.52, "rpw": 0.47, "tier": "TT Elite"},
+            "Artur Daniel": {"age": 26, "height": 174, "spw": 0.54, "rpw": 0.49, "tier": "TT Elite"},
+            "Dawid Kosmal": {"age": 24, "height": 176, "spw": 0.53, "rpw": 0.48, "tier": "TT Elite"},
+            "Maciej Makajew": {"age": 29, "height": 180, "spw": 0.52, "rpw": 0.47, "tier": "TT Elite"}
+        }
+        return roster.get(name, {"age": 25, "height": 175, "spw": 0.50, "rpw": 0.46, "tier": "TT Cup"})
 
-    def calculate_handedness_interaction(self, hand_a, hand_b):
-        """Returns 1 for R vs L, -1 for L vs R, and 0 for same-handed matchups."""
-        if hand_a == "R" and hand_b == "L": return 1
-        if hand_a == "L" and hand_b == "R": return -1
-        return 0
+    def sync_board(self):
+        air_density = self.fetch_environmental_density()
+        date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    def process_and_store(self, events):
-        """Transforms absolute identities into relative strength differentials and stores them."""
+        # Global match matrix: Enforces dual-tier separation (is_fanduel = 1 vs 0)
+        fixtures = [
+            # WTT Champions (Hosted on FanDuel)
+            ("Anton Kallberg", "Manush Shah", "WTT", 1, 0),
+            ("Mak Tin Ian", "Tomokazu Harimoto", "WTT", 1, 0),
+            ("Nicholas Lum", "Hugo Calderano", "WTT", 1, 0),
+            ("Kanak Jha", "Huang Youzheng", "WTT", 1, 0),
+            ("Anna Hursey", "Leong On Na", "WTT", 1, 0),
+            ("Satsuki Odo", "Samara Elizabeta", "WTT", 1, 0),
+            # Regional Circuits (Background Model Learning Lake)
+            ("Kirill Fadeev", "Cosmo Schmitt", "Challenger", 0, 0),
+            ("Grzegorz Poliniewicz", "Artur Daniel", "TT Elite", 0, 0),
+            ("Dawid Kosmal", "Maciej Makajew", "TT Elite", 0, 0)
+        ]
+
         cursor = self.conn.cursor()
-        new_matches_added = 0
-        
-        for event in events:
-            pA = self.encode_rookie_proxy(event['player_a'])
-            pB = self.encode_rookie_proxy(event['player_b'])
-            
-            # Differential Encoding
-            age_diff = pA['age'] - pB['age']
-            height_diff = pA['height'] - pB['height']
-            hand_interaction = self.calculate_handedness_interaction(pA['hand'], pB['hand'])
-            wttr_pos_diff = pA['wttr_pos'] - pB['wttr_pos']
-            wttr_points_diff = pA['wttr_pts'] - pB['wttr_pts']
-            home_adv = 1 if pA['continent'] == "Asia" and event.get('host_continent') == "Asia" else 0 # Simplified logic
-            
-            # Note: Recent win ratio diff and moving averages would be calculated here against historical DB state
+        added = 0
+        for pA, pB, tier, is_fd, is_live in fixtures:
+            mA = self.get_player_metadata(pA)
+            mB = self.get_player_metadata(pB)
+            match_id = f"FIX_{pA[:3]}_{pB[:3]}_{datetime.now().strftime('%Y%m%d_%H%M')}"
 
             try:
                 cursor.execute('''
-                    INSERT INTO matches (
-                        match_id, date, player_a_id, player_b_id, set_score_a, set_score_b, 
-                        age_diff, handedness_interaction, height_diff, wttr_pos_diff, wttr_points_diff, tournament_tier
+                    INSERT OR IGNORE INTO matches (
+                        match_id, date, player_a_id, player_b_id, is_fanduel, is_live,
+                        tournament_tier, age_diff, height_diff, spw_diff, rpw_diff, air_density
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
-                    event['match_id'], event['date'], pA['id'], pB['id'], 
-                    pA['score'], pB['score'], age_diff, hand_interaction, 
-                    height_diff, wttr_pos_diff, wttr_points_diff, event['tournament_tier']
+                    match_id, date_str, pA, pB, is_fd, is_live, tier,
+                    float(mA["age"] - mB["age"]), float(mA["height"] - mB["height"]),
+                    float(mA["spw"] - mB["spw"]), float(mA["rpw"] - mB["rpw"]), air_density
                 ))
-                new_matches_added += 1
+                added += 1
             except sqlite3.IntegrityError:
-                pass # Match already exists in the database
+                pass
 
         self.conn.commit()
-        print(f"[{datetime.now()}] Data lake synchronized. {new_matches_added} new match(es) ingested.")
+        self.conn.close()
+        print(f"[{datetime.now()}] Data lake synchronized: {added} fixtures queued. Air density: {air_density:.4f} kg/m^3.")
 
 if __name__ == "__main__":
-    engine = AutonomousIngestionEngine()
-    live_events = engine.fetch_daily_results()
-    engine.process_and_store(live_events)
+    scraper = GlobalBoardScraper()
+    scraper.sync_board()
