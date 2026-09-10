@@ -15,7 +15,6 @@ import xgboost as xgb
 from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier, StackingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.calibration import CalibratedClassifierCV
-from sklearn.frozen import FrozenEstimator
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import brier_score_loss, log_loss
 
@@ -279,7 +278,7 @@ class EnsemblePipeline:
         ]
         
         stack = StackingClassifier(estimators=base_models, final_estimator=LogisticRegression(), cv=3)
-        calibrated_stack = CalibratedClassifierCV(estimator=FrozenEstimator(stack), method='isotonic', cv=3)
+        calibrated_stack = CalibratedClassifierCV(estimator=stack, method='isotonic', cv=3)
         calibrated_stack.fit(X, y)
 
         joblib.dump(calibrated_stack, MODEL_PATH)
@@ -336,6 +335,14 @@ class UnifiedPipeline:
                 tier = row["tournament_tier"] or "default"
                 is_fanduel = row["is_fanduel"]
 
+                # Safe fallbacks for SQLite NULLs
+                sets_a = row["set_score_a"] or 0
+                sets_b = row["set_score_b"] or 0
+                momentum = row["momentum_index"] or 0.0
+                air_density = row["air_density"] or 1.225
+                age_diff = row["age_diff"] or 0.0
+                height_diff = row["height_diff"] or 0.0
+
                 self.core.apply_inactivity_decay(pA, row["date"][:10])
                 self.core.apply_inactivity_decay(pB, row["date"][:10])
 
@@ -343,25 +350,24 @@ class UnifiedPipeline:
                 rB, dB = self.core.get_bayesian_rating(pB, tier)
                 
                 style_adv = self.sim.calculate_style_advantage(dA["melo"], dB["melo"])
-                air_density = row["air_density"] or 1.225
 
                 set_dist = self.sim.run_50k_simulations(
-                    dA["spw"], dB["spw"], sets_a=row["set_score_a"], sets_b=row["set_score_b"],
-                    momentum=row["momentum_index"], air_density=air_density
+                    dA["spw"], dB["spw"], sets_a=sets_a, sets_b=sets_b,
+                    momentum=momentum, air_density=air_density
                 )
                 p_sim_a = set_dist["3-0"] + set_dist["3-1"] + set_dist["3-2"]
 
                 features = pd.DataFrame([{
                     'rating_diff': float(rA - rB),
-                    'style_adv': style_adv,
+                    'style_adv': float(style_adv),
                     'markov_diff': float(p_sim_a - (1.0 - p_sim_a)),
                     'spw_diff': float(dA["spw"] - dB["spw"]),
                     'rpw_diff': float(dA["rpw"] - dB["rpw"]),
-                    'age_diff': float(row["age_diff"]),
-                    'height_diff': float(row["height_diff"]),
+                    'age_diff': float(age_diff),
+                    'height_diff': float(height_diff),
                     'unforced_diff': float(dA["unforced_rate"] - dB["unforced_rate"]),
                     'air_density': float(air_density),
-                    'momentum': float(row["momentum_index"]),
+                    'momentum': float(momentum),
                     'tier_code': 1
                 }])
 
@@ -380,6 +386,7 @@ class UnifiedPipeline:
                            f"Calibrated Confidence: {confidence*100:.2f}%\n"
                            f"Set Distribution: {dist_str}")
                     priority = "high" if confidence >= 0.65 else "default"
+                    print(f"\n[ALERTING FANDUEL MATCH] {pA} vs {pB} -> {winner} ({confidence*100:.2f}%)")
                     try:
                         requests.post(f"https://ntfy.sh/{self.ntfy_topic}", data=msg.encode("utf-8"),
                                       headers={"Title": f"Table Tennis: {pA} vs {pB}", "Priority": priority}, timeout=5)
