@@ -23,12 +23,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Execute Full Autonomous Pipeline (Settle, Learn, Predict & Alert)
+      - name: Execute Autonomous Pipeline (Settle, Queue, Predict)
         run: python src/unified_engine.py --auto
 
-      - name: Commit and Push Updated Brain State & Data Lake
+      - name: Commit and Push Calibrated Artifacts & Databases
         run: |
           git config --global user.name "GitHub Actions - Engine"
           git config --global user.email "actions@github.com"
           git add data/
-          git diff --quiet && git diff --staged --quiet || (git commit -m "[Auto] Settle finished matches, update brain state, and log predictions" && git push)
+          git diff --quiet && git diff --staged --quiet || (git commit -m "[Auto] Autonomous prediction cycle and schema update" && git push)
